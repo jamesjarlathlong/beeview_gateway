@@ -1,4 +1,4 @@
-import asyncio as asyncio
+import uasyncio as asyncio
 import json as json
 import time as time
 import select
@@ -6,8 +6,6 @@ from zbee.zigbee import ZigBee
 import gc
 import serial
 import os
-import crc32
-import accelreader
 import networking
 from algorithms import np
 import random
@@ -27,6 +25,7 @@ def benchmark1(size):
     v = np.Vector(*vec(size))
     res = v.gen_matrix_mult(mat)
     return
+
 class Comm:
     """ a class organising communications for uasync_sense:
     qs, interrupts and serial objects """
@@ -35,7 +34,7 @@ class Comm:
         self.bm_q = asyncio.Queue(maxsize = 16)
         self.accelq = asyncio.Queue(maxsize = 4096)
         self.res_queue = asyncio.Queue()
-        self.at_queue = asynio.Queue()
+        self.at_queue = asyncio.Queue()
         self.output_q = asyncio.Queue() #q for pieced together messages
         self.intermediate_output_q = asyncio.Queue()
         self.coro_queue = asyncio.PriorityQueue()
@@ -48,12 +47,12 @@ class Comm:
             pass
         #self.extint = pyb.ExtInt('X10', pyb.ExtInt.IRQ_RISING_FALLING, pyb.Pin.PULL_NONE, cb)
         #self.uart = pyb.UART(1,9600, read_buf_len=1024)
-        self.uart = serial.Serial('/dev/ttymxc2', 9600)
+        self.uart = serial.Serial('/COM1', 9600)
          #allocating 512 bytes to the uart buffer -  alot? maybe but we have ~128 kB of RAM
         self.ZBee = ZigBee(self.uart, escaped =False)
         self.writer = asyncio.ZigbeeStreamWriter(self.ZBee)
         self.zbee_id = 0
-        self.ID = int(os.getenv("NODE_ID"))
+        self.ID =0
         print('ID is: ', self.ID)
         self.address_book = {'Server': b'\x00\x13\xa2\x00@\xdasp',
                             0: b'\x00\x13\xa2\x00@\xdasp',
@@ -135,7 +134,7 @@ class ControlTasks:
     DEEP_SLEEP = 0
     IDLE_SLEEP = 1
     def __init__(self,loop,comm):
-        self.ID = int(os.getenv("NODE_ID")) 
+        self.ID = 0
         self.eventloop = loop
         self.sleep_for = 1
         self.sleep_mode = ControlTasks.IDLE_SLEEP
