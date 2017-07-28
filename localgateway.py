@@ -14,7 +14,7 @@ def result_prep(data):
 	username_job = data['u']
 	l = len(username_job)
 	job_id = username_job[l-5::]
-	username = [0:l-5]
+	username = username_job[0:l-5]
 	result = json.dumps(data['res'])
 	u['request']=result
 	u['username'] = username
@@ -48,7 +48,7 @@ def at_reader(socket, q):
 			upsert_data = {'source':1,'target':1,'value':1}
 			yield from socket.emit('FN',upsert_data)
 @asyncio.coroutine
-def query_passer(controller, sid, data)
+def query_passer(controller, sid, data):
 	query = json.loads(data)
 	job = query['job']
 	uname = query['username']
@@ -69,12 +69,12 @@ if __name__ == "__main__":
 	### now start adding tasks to base loop ###
 	comm = usense.Comm()
 	controller = usense.ControlTasks(loop, comm)
-    loop.add_reader(comm.uart.fd, usense.handle_stdin, comm, loop)
-    query_gateway = functools.partial(query_passer, controller)
-    sio.on('queryToGateway')(query_gateway)
-    tasks = [controller.radio_listener(), controller.queue_placer(), controller.benchmark(),
-             controller.function_definer(), controller.worker(), 
-             at_reader(sio, controller.comm.at_queue), res_reader(sio, controller.comm.res_queue)]
-    for task in tasks:
-        asyncio.ensure_future(task)
-    web.run_app(app)
+	loop.add_reader(comm.uart.fd, usense.handle_stdin, comm, loop)
+	query_gateway = functools.partial(query_passer, controller)
+	sio.on('queryToGateway')(query_gateway)
+	tasks = [controller.radio_listener(), controller.queue_placer(), controller.benchmark(),
+			controller.function_definer(), controller.worker(), 
+			at_reader(sio, controller.comm.at_queue), res_reader(sio, controller.comm.res_queue)]
+	for task in tasks:
+		asyncio.ensure_future(task)
+	web.run_app(app)
