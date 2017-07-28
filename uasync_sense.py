@@ -1,4 +1,4 @@
-import uasyncio as asyncio
+import asyncio as asyncio
 import json as json
 import time as time
 import select
@@ -8,7 +8,69 @@ import serial
 import os
 import networking
 from algorithms import np
-import random
+import random as urandom
+
+class ZigbeeStreamWriter():
+    def __init__(self, s):
+        self.s = s
+        self._transport = s.serial
+    @asyncio.coroutine
+    def network_awrite(self, buf, addr, frame_id):
+        print('network awriter')
+        yield from asyncio.sleep(0)
+        frameified = self.s.prepare_send('tx', frame_id = frame_id, data=buf,
+                                    dest_addr_long=addr, dest_addr=b'\xff\xfe')
+        print('frameified: ', frameified)
+        self._transport.write(frameified)
+    def network_awrite_single(self, single, addr,frame_id):
+        """
+        takes a single message in dict form, converts it to bytes
+        and calls network_awrite
+        """
+        byteified = networking.json_to_bytes(single)
+        network_awrite(byteified, addr, frame_id)
+class KVQueue():
+    """Class that maintains a dictionary of Priority Queues,
+    one for each jobid"""
+    def __init__(self, maxsize=512):
+        self._qs = {}
+        self.maxsize = maxsize
+    def put(self, item, _id):
+        """put item on the corresponding q, if it doesnt exist init it"""
+        try:
+            yield from self._qs[_id].put(item)
+            #print('q is: ',self._qs[_id]._queue)
+        except KeyError:
+            self._qs[_id] = asyncio.PriorityQueue(maxsize=self.maxsize)
+            ##print('began q: ', item, _id)
+            yield from self._qs[_id].put(item)
+            ##print(self._qs[_id]._queue)
+    def put_nowait(self, item, _id):
+        """put_nowait item on the corresponding q, if it doesnt exist init it"""
+        try:
+            self._qs[_id].put_nowait(item)
+        except KeyError:
+            self._qs[_id] = asyncio.PriorityQueue(maxsize=self.maxsize)
+            self._qs[_id].put_nowait(item)
+    def get(self, _id):
+        """get item from the q corresponding to _id"""
+        try:
+            item = yield from self._qs[_id].get()
+            return item
+        except KeyError:
+            self._qs[_id] = asyncio.PriorityQueue(maxsize=self.maxsize)
+            item = yield from self._qs[_id].get()
+            return item
+    def qsize(self, _id):
+        try:
+            return self._qs[_id].qsize()
+        except KeyError:
+            return 0
+    def num_qs(self):
+        return len([key for key in self._qs.keys()])
+    def remove(self, _id):
+        del self._qs[_id]
+
 def timeit(method):
     def timed(*args, **kw):
         ts = time.time()
@@ -17,6 +79,24 @@ def timeit(method):
         ex_time = te-ts
         return ex_time,result
     return timed
+def timecoroutine(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = yield from method(*args, **kw)
+        te = time.time()
+        ex_time = te-ts
+        return ex_time,result
+    return timed
+def append_record(record):
+    with open('tx_stats', 'a') as f:
+        json.dump(record, f)
+        f.write(os.linesep)
+def write_stats_to_file(method):
+    def writestats(*args):
+        stats = yield from method(*args)
+        append_record(stats)
+        return stats
+    return writestats
 @timeit
 def benchmark1(size):
     def vec(size):
@@ -25,21 +105,23 @@ def benchmark1(size):
     v = np.Vector(*vec(size))
     res = v.gen_matrix_mult(mat)
     return
-
+def random_word():
+    return str(urandom.getrandbits(12))
 class Comm:
     """ a class organising communications for uasync_sense:
     qs, interrupts and serial objects """
     def __init__(self):
         self.queue = asyncio.Queue(maxsize = 4096)
         self.bm_q = asyncio.Queue(maxsize = 16)
+        self.fn_queue = asyncio.Queue()
         self.accelq = asyncio.Queue(maxsize = 4096)
         self.res_queue = asyncio.Queue()
         self.at_queue = asyncio.Queue()
         self.output_q = asyncio.Queue() #q for pieced together messages
         self.intermediate_output_q = asyncio.Queue()
         self.coro_queue = asyncio.PriorityQueue()
-        self.kv_queue = asyncio.KVQueue(maxsize = 512)
-        self.sense_queue = asyncio.KVQueue(maxsize = 32)
+        self.kv_queue = KVQueue(maxsize = 512)
+        self.sense_queue = KVQueue(maxsize = 32)
         self.f_queue = asyncio.Queue()
         # callback for extint
         def cb(line):
@@ -47,15 +129,16 @@ class Comm:
             pass
         #self.extint = pyb.ExtInt('X10', pyb.ExtInt.IRQ_RISING_FALLING, pyb.Pin.PULL_NONE, cb)
         #self.uart = pyb.UART(1,9600, read_buf_len=1024)
-        self.uart = serial.Serial('/COM1', 9600)
+        self.uart = serial.Serial('/dev/ttyUSB0', 9600)
          #allocating 512 bytes to the uart buffer -  alot? maybe but we have ~128 kB of RAM
         self.ZBee = ZigBee(self.uart, escaped =False)
-        self.writer = asyncio.ZigbeeStreamWriter(self.ZBee)
+        self.ZBee.send('at', command=b'NO',parameter=b'\x04')
+        self.writer = ZigbeeStreamWriter(self.ZBee)
         self.zbee_id = 0
-        self.ID =0
+        self.ID =99
         print('ID is: ', self.ID)
         self.address_book = {'Server': b'\x00\x13\xa2\x00@\xdasp',
-                            0: b'\x00\x13\xa2\x00@\xdasp',
+                            99: b'\x00\x13\xa2\x00@\xdasp',
                             15: b'\x00\x13\xa2\x00AZ\xe8n',17: b'\x00\x13\xa2\x00AZ\xe8s',
                             18: b'\x00\x13\xa2\x00A\x05F\x99',21: b'\x00\x13\xa2\x00A\x05H}',
                             22: b'\x00\x13\xa2\x00A\x05F\xa2',29: b'\x00\x13\xa2\x00A\x05H\x81',
@@ -76,6 +159,9 @@ class Comm:
         else:
             self.zbee_id = 0
         return bytes([self.zbee_id])
+    def inverse_address(self,value):
+        book = self.address_book
+        return list(book.keys())[list(book.values()).index(value)]
 
 class Q_Item:
     def __init__(self, x):
@@ -134,7 +220,7 @@ class ControlTasks:
     DEEP_SLEEP = 0
     IDLE_SLEEP = 1
     def __init__(self,loop,comm):
-        self.ID = 0
+        self.ID = 99
         self.eventloop = loop
         self.sleep_for = 1
         self.sleep_mode = ControlTasks.IDLE_SLEEP
@@ -147,6 +233,7 @@ class ControlTasks:
         #self.rtc = pyb.RTC()
         self.sleep_handlers = {ControlTasks.IDLE_SLEEP: self.idle_sleep, ControlTasks.DEEP_SLEEP: self.deep_sleep} 
         self.completed_msgs = {}
+        self.neighbors=[]
     def package(self, job_class, time_received, user):
         #======================#sense stage#======================#    
         exec_time, curried_runfunc = self.package_senser(job_class.sampler,
@@ -280,7 +367,11 @@ class ControlTasks:
         exec(source_code)
         job_class = locals()['SenseReduce']()
         return job_class
-    
+    @asyncio.coroutine
+    def multiple_chunk_assembler(self):
+        while True:
+            yield from self.comm.ZBee.assemble_chunks(self.comm.intermediate_output_q
+                                                     , self.comm.queue)
     @asyncio.coroutine
     def radio_listener(self):
         while True:
@@ -288,34 +379,49 @@ class ControlTasks:
                                                                self.comm.intermediate_output_q,
                                                                self.comm.output_q)
     @asyncio.coroutine
-    def send_and_wait(self, byte_chunk, addr, frame_id=None):
+    @timecoroutine
+    def send_and_wait(self, byte_chunk, addr, frame_id=None,level=0):
         """given a chunk of a message to send to addr
         send the chunk, and then wait for confirmation that
         the message has sent before returning"""
         if not frame_id:
             frame_id = self.comm.id_counter()
+        print('about to write: ', byte_chunk)
         yield from self.comm.writer.network_awrite(byte_chunk, addr, frame_id)
-        status = yield from self.check_acknowledged(frame_id)
-        print('status is: ',status)
+        status,retries = yield from self.check_acknowledged(frame_id)
+        print('status is: ',status,retries)
         success = b'\x00'
         if status == success:
-            print('success sending: ', frame_id, byte_chunk)
-            return
+            print('success sending: ', frame_id, byte_chunk,level)
+            return retries, level
         else:
             #wait a second first
-            yield from asyncio.sleep(1)
+            yield from asyncio.sleep(0.2+0.2*level)
             print('trying again: ', frame_id)
-            yield from self.send_and_wait(byte_chunk, addr, frame_id = frame_id)
+            retries, level = yield from self.send_and_wait(byte_chunk, addr, frame_id = frame_id,level=level+1)
+            return retries,level
     @asyncio.coroutine
+    @write_stats_to_file
     def node_to_node(self, message, address):
         self_address = self.comm.address_book[self.comm.ID]
         if address == self_address:
             if 'kv' in message:
                 print('node to node: ', message)
                 message['u'] = message['u'][2::]#don't need nodeid concat
+            if 'res' in message:
+                message['res'] = json.loads(message['res'][1])
             self.message_to_queue(message)
         else:
-            yield from self.network_awrite_chunked(message, address)        
+            stats = yield from self.network_awrite_chunked(message, address) 
+            stats['msg'] = message 
+            return stats
+    @asyncio.coroutine
+    def bandwidth_measurer(self,nodenum):
+        test_data = {'test':[urandom.getrandbits(4) for i in range(100)]}
+        print('sending bandtest')
+        stat_package = yield from self.node_to_node(test_data, self.comm.address_book[nodenum])
+        return stat_package
+
     @asyncio.coroutine
     def network_awrite_chunked(self, buf, addr):
         """
@@ -323,11 +429,28 @@ class ControlTasks:
         of the message, adds message number and chk for each, converts
         it to bytes and calls network_awrite for each
         """
+        def unpacker(a):
+            if isinstance(a[1],int):
+                return a
+            else:
+                return unpacker(a[1])
+        def unpack(packed):
+            return packed[0], unpacker(packed)
         chunks = networking.chunk_data_to_payload(buf)
         ##print('chunks is: ',chunks)
         byteified_msgs = map(networking.json_to_bytes, chunks)
+        nodenum = self.comm.inverse_address(addr)
+        try:
+            rssi = [i for i in self.neighbors if i['target'] ==nodenum][0]['value']
+        except:
+            rssi = None
+        stats = []
         for byte_chunk in byteified_msgs:
-            yield from self.send_and_wait(byte_chunk, addr)
+            packaged = yield from self.send_and_wait(byte_chunk, addr)
+            print('pack: ',packaged)
+            t, (retries,level) = unpack(packaged)
+            stats.append({'t':t,'retries':retries,'level':level})
+        return {'msgize':len(json.dumps(buf,separators=(',',':'))) ,'stats':stats,'rssi':rssi,'node':nodenum}
          
     def acknowledge(self, msg):
         """on receipt of an ack from the network, add the msg id
@@ -335,31 +458,67 @@ class ControlTasks:
         ##print('acking')
         msg_id = msg['frame_id']
         status = msg['deliver_status']
-        self.completed_msgs[msg_id] = status    
+        retries = msg['retries'][0]
+        self.completed_msgs[msg_id] = (status,retries)    
         
     @asyncio.coroutine
     def check_acknowledged(self, msg_id):
         """check if the message associated with msg_id was 
         acknowledged. If no ack within 3 seconds, return failed"""
         counter = 0
-        while (msg_id not in self.completed_msgs) and (counter<3):
+        while (msg_id not in self.completed_msgs) and (counter<20):
             #print(msg_id,'not ack yet: ',  self.completed_msgs)
-            yield from asyncio.sleep(0.2)
+            yield from asyncio.sleep(0.05)
             counter+=1
         try:
-            status = self.completed_msgs[msg_id]
+            status,retries = self.completed_msgs[msg_id]
             del self.completed_msgs[msg_id]
         except KeyError:
             status = 'timed out'
-        return status
+            retries = None
+        return status, retries
     @asyncio.coroutine
     def benchmark(self):
         while True:
             data = yield from self.comm.bm_q.get()
             t, res = benchmark1(data)
             self.most_recent_benchmark = t
-            result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id('benchmark'+str(data))}
+            result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id(random_word()+'bnch'+str(data))}
             yield from self.node_to_node(result_tx, self.comm.address_book['Server'])
+    @asyncio.coroutine
+    def report_neighbours(self):
+        while True:
+            req = yield from self.comm.fn_queue.get()
+            neighbors = self.neighbors
+            result_tx = {'res':(1,json.dumps({'rs':neighbors})),'u':self.add_id(random_word()+'rs')}
+            print('result_tx',result_tx)
+            yield from self.node_to_node(result_tx, self.comm.address_book['Server'])
+    @asyncio.coroutine
+    def at_reader(self):
+        while True:
+            data = yield from self.comm.at_queue.get()
+            print('data: ', data)
+            if data['command'] == b'FN':
+                payload = data['parameter']
+                print('payload: ',payload)
+                #find neighbor address
+                neighbor_node_addr = payload[2:10]
+                neighbor_number = self.comm.inverse_address(neighbor_node_addr)
+                #find rssi
+                rssi = payload[-1]
+                upsert_data = {'source':self.ID,'target':neighbor_number,'value':rssi}
+                self.neighbors.append(upsert_data)
+                print('upsert_data:',upsert_data, self.neighbors)
+    @asyncio.coroutine
+    def find_neighbours(self):
+        while True:
+            self.get_fn()
+            yield from asyncio.sleep(1000)
+    def get_fn(self):
+        self.neighbors = []
+        print('sending')
+        self.comm.ZBee.send('at', command=b'FN')
+        print('sent!')
     def res_to_queue(self,data):
         self.comm.res_queue.put_nowait(data)
     def f_to_queue(self, data):
@@ -368,6 +527,8 @@ class ControlTasks:
         self.comm.sense_queue.put_nowait(data['s'], data['u'])
     def bm_to_queue(self, data):
         self.comm.bm_q.put_nowait(data['bm'])
+    def fn_to_queue(self, data):
+        self.comm.fn_queue.put_nowait(data['fn'])
     def kv_to_queue(self, data):
         print('data in kvtoq: ', data)
         kv_pair = data['kv'] 
@@ -377,7 +538,8 @@ class ControlTasks:
                      'kv':self.kv_to_queue,
                      's':self.s_to_queue
                      ,'bm':self.bm_to_queue
-                     ,'res':self.res_to_queue}
+                     ,'res':self.res_to_queue
+                     ,'fn':self.fn_to_queue}
         matches = [k for k in data if k in queue_map]
         for key in matches:
             queue_map[key](data)    
@@ -388,7 +550,7 @@ class ControlTasks:
         kv, s, or f"""
         while True:
             msg = yield from self.comm.output_q.get()
-            print('got a message', msg)
+            print('got a msg',msg)
             try:
                 data = json.loads(msg['rf_data'])
                 self.message_to_queue(data)
@@ -397,6 +559,7 @@ class ControlTasks:
                     self.acknowledge(msg)  
                 #add handling of AT command responses here e.g. finding neighbors
                 if msg['id'] in ['at_response', 'remote_at_response']:
+                    print('putting on at')
                     self.comm.at_queue.put_nowait(msg)  
     @asyncio.coroutine    
     def function_definer(self):
@@ -473,7 +636,8 @@ class ControlTasks:
         job_nodeid = self.add_id(curried_func['u']) 
         gen = curried_func['map_func'](curried_func['map_arg'], map_data) #generator function
         for j in gen:
-            if isinstance(j, asyncio.Sleep):
+            print('j is: ',j)
+            if isinstance(j, asyncio.Future):
                 yield j
             else:
                 if j is not None:
@@ -511,6 +675,7 @@ class ControlTasks:
     
     @asyncio.coroutine
     def reduce_worker(self,curried_func):
+        print('called reduce worker')
         user = curried_func['u']
         reduce_controller = curried_func['reduce_func']
         reduce_logic = curried_func['reduce_arg']
@@ -519,11 +684,13 @@ class ControlTasks:
         i = 0
         #check if all num_mappers have given a map_done message
         results = {}
+        print('starting loop')
         while i<num_mappers:
             yield from asyncio.sleep(0.05)
+            print('reading from kvq: ',self.comm.kv_queue._qs)
             kv = yield from self.comm.kv_queue.get(user)
             if kv[0].x == "MAP_DONE":
-                ##print('got map done from ',i)  
+                print('got map done from ',i)  
                 i+=1
             else:
                 yield from self.comm.kv_queue.put(kv, user)
@@ -535,7 +702,8 @@ class ControlTasks:
             reduce_gen = reduce_controller(reduce_logic, key, values)
             #now advance the generator
             for j in reduce_gen:
-                    if isinstance(j, asyncio.Sleep):
+                    print('in reduce j: ',j)
+                    if isinstance(j, asyncio.Future):
                         yield j
                     else:
                         if j is not None:

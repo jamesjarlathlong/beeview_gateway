@@ -38,7 +38,7 @@ class XBeeAsync(XBeeBase):
                     msg['rf_data'] = rf_data
                     yield from outputq.put(msg)
             else:
-                yield from outputq.put(data)
+                yield from outputq.put(msg)
     @asyncio.coroutine
     def assemble_chunks(self, intermediate_output_q, dataq):
         chunk_def = {}
@@ -47,7 +47,8 @@ class XBeeAsync(XBeeBase):
             msg = yield from self.wait_read_frame(dataq)
             #print('wait frame is: ',msg)
             try:
-                data = json.loads(msg['rf_data'])
+                rf = msg['rf_data']
+                data = json.loads(msg['rf_data'].decode('utf-8'))
                 try:
                     idx = data['n']
                     del data['n']
@@ -66,7 +67,7 @@ class XBeeAsync(XBeeBase):
                         del base_job_id
                     except NameError:
                         pass
-                    if chunk_type in ['kv','res']:
+                    if chunk_type in ['kv']:
                         print('got a kv: ', job_id, data) 
                         base_job_id = job_id[2::] # ie job_id = '91abcde'                    
                     try:
@@ -126,6 +127,7 @@ class XBeeAsync(XBeeBase):
                     #z.send('tx', data=b'still bytes remaining', dest_addr_long=addr, dest_addr=b'\xff\xfe')
                     #led2.on()
                     byte = yield from dataq.get()#yield from dataq.get()
+                    #print('got a byte: ', byte)
                     if len(byte) == 1:
                         frame.fill(byte)        
                 try:
