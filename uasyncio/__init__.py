@@ -145,25 +145,7 @@ class ZigbeeStreamWriter(StreamWriter):
         and calls network_awrite
         """
         byteified = networking.json_to_bytes(single)
-        yield from self.network_awrite(byteified, addr,frame_id)
+        frameified = self.s.prepare_send('tx', frame_id = frame_id, data=buf,
+                                    dest_addr_long=addr, dest_addr=b'\xff\xfe')
+        yield from self.write(frameified)
                    
-    def network_awrite(self, buf, addr, frame_id):
-        # This method subclasses streamwriter.awrite method to allow
-        # networking addressing and zigbee specific protocol
-        frame = self.s.prepare_send('tx', frame_id = frame_id, data=buf,
-                                    dest_addr_long=addr, dest_addr=b'\xff\xfe')        
-        sz = len(frame)
-        while True:
-            res = self.s.serial.write(frame)
-            #print('res is: ', res, 'sz is: ', sz)
-            # If we spooled everything, return immediately
-            if res == sz:
-                return
-            if res is None:
-                res = 0
-            assert res < sz
-            buf = buf[res:]
-            sz -= res 
-            s2 = yield IOWrite(self.s.serial)
-            #assert s2 == self.s              
-print('init finished')
