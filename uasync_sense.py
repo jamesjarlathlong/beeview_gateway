@@ -10,6 +10,7 @@ import networking
 from algorithms import np
 import random as urandom
 
+
 class ZigbeeStreamWriter():
     def __init__(self, s):
         self.s = s
@@ -71,6 +72,16 @@ class KVQueue():
     def remove(self, _id):
         del self._qs[_id]
 
+def timed_gen(gen, user, key=None, node=None):
+    ts = []
+    while True:
+        try:
+            t, res = timeit(next)(gen)
+            ts.append(t)
+            yield res
+        except StopIteration:
+            break
+    print(ts, key, node)
 def timeit(method):
     def timed(*args, **kw):
         ts = time.time()
@@ -607,11 +618,14 @@ class ControlTasks:
                     yield from self.sense_worker(curried_func)
                     print('finished sampler')
                 if self.comm.ID in curried_func['map_nodes']:
-                    print('starting mapper')
-                    data = yield from self.comm.sense_queue.get(curried_func['u'])
-                    print('got data')
-                    yield from self.map_worker(curried_func, data)
-                    print('finished mapper')
+                    maps = curried_func['map_nodes']
+                    positions = [i for i,e in enumerate(maps) if e==self.comm.ID]
+                    for idx in positions:
+                        print('starting mapper',idx)
+                        data = yield from self.comm.sense_queue.get(str(idx)+'_'+curried_func['u'])
+                        print('got data')
+                        yield from self.map_worker(curried_func, data, idx)
+                        print('finished mapper')
                 if self.comm.ID in curried_func['reduce_nodes']:
                     print('reducing')
                     yield from self.reduce_worker(curried_func)
@@ -622,26 +636,25 @@ class ControlTasks:
                 yield from asyncio.sleep(0)
     @asyncio.coroutine
     def sense_worker(self, curried_func):
+        map_idx = curried_func['sense_nodes'].index(self.comm.ID)
         data = yield from curried_func['func'](curried_func['arg'])
-        message = {'s':data, 'u':curried_func['u']}
-        mapper_idx = curried_func['sense_nodes'].index(self.comm.ID)
-        child_node = curried_func['map_nodes'][mapper_idx]
+        message = {'s':data, 'u':str(map_idx)+'_'+curried_func['u']}
+        child_node = curried_func['map_nodes'][map_idx]
         yield from self.node_to_node(message, self.comm.address_book[child_node])
     def partitioner(self, key, reducer_ids):
         idx = hash(key)%len(reducer_ids)
         return reducer_ids[idx]
     @asyncio.coroutine
-    def map_worker(self, curried_func, map_data):
+    def map_worker(self, curried_func, map_data, map_idx):
         reduce_nodes= curried_func['reduce_nodes']
         job_nodeid = self.add_id(curried_func['u']) 
         gen = curried_func['map_func'](curried_func['map_arg'], map_data) #generator function
-        for j in gen:
+        for j in timed_gen(gen, curried_func['u'], node=map_idx):
             print('j is: ',j)
             if isinstance(j, asyncio.Future):
                 yield j
             else:
                 if j is not None:
-
                     key,value = j
                     dest_id = self.partitioner(key, reduce_nodes)
                     reduce_dest = self.comm.address_book[dest_id]
@@ -653,7 +666,7 @@ class ControlTasks:
         for dest in reduce_node_addresses:
             end_message = {'kv':("MAP_DONE",0), 'u':job_nodeid}
             yield from self.node_to_node(end_message, dest)
-        self.comm.sense_queue.remove(curried_func['u'])       
+        self.comm.sense_queue.remove(str(map_idx)+'_'+curried_func['u'])       
         return
     #@asyncio.coroutine
     def get_groupedby(self,q):
@@ -701,7 +714,7 @@ class ControlTasks:
             values = grouped_pairs
             reduce_gen = reduce_controller(reduce_logic, key, values)
             #now advance the generator
-            for j in reduce_gen:
+            for j in timed_gen(reduce_gen, user, key=key):
                     print('in reduce j: ',j)
                     if isinstance(j, asyncio.Future):
                         yield j
