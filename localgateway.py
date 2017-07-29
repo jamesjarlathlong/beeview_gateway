@@ -1,4 +1,4 @@
-import uasync_sense as usense
+]import uasync_sense as usense
 from aiohttp import web
 import socketio
 import asyncio
