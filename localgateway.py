@@ -21,12 +21,14 @@ def benchmarker_runner(controller, size, nodenumbers):
 		yield from asyncio.sleep(20)
 @asyncio.coroutine
 def bandtest_runner(controller):
-	yield from asyncio.sleep(50)
-	for entry in controller.neighbors:
+	yield from asyncio.sleep(30)
+	candidates = [i for i in controller.neighbors if i['value']<65]
+	print('candidates: ',candidates)
+	for entry in candidates:
 		node = entry['target']
 		statpackage = yield from controller.bandwidth_measurer(node)
-		print('statpackage: ',statpackage)
-		yield from asyncio.sleep(25)
+		yield from asyncio.sleep(5)
+	print('done bandtesting')
 @asyncio.coroutine
 def fn_runner(controller, nodenumbers):
 	while True:
@@ -135,8 +137,8 @@ if __name__ == "__main__":
 			,controller.queue_placer() ,res_reader(sio, controller.comm.res_queue)
 			,controller.at_reader(),controller.function_definer(), controller.worker()
 			,controller.benchmark()
-			,controller.report_neighbours(),controller.find_neighbours()
-			,bandtest_runner(controller)]
+			,controller.report_neighbours(),controller.find_neighbours()]
+			#,bandtest_runner(controller)]
 			#,fn_runner(controller, [17])]--need to replace with on demand
 			#,benchmarker_runner(controller,50, [99,17]),]-need to replace with on demand
 
