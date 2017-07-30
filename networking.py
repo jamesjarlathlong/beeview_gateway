@@ -1,5 +1,5 @@
 import json as json
-
+import copy
 def json_to_bytes(dict_msg):
     return bytes(json.dumps(dict_msg,separators=(',',':')), 'ascii')
 
@@ -11,10 +11,11 @@ def add_chksum_info_tochunks(chunks, user, chunk_type):
                        for idx, chunk in enumerate(chunks)]
     return full_chunk_msgs
 
-def chunk_data_to_payload(dict_msg):
+def chunk_data_to_payload(immute_dict_msg):
     """take a single message in json form
     {something:something, 'u':username}, where u is optional
     and split into a list of strings, each less than x bytes"""
+    dict_msg = copy.deepcopy(immute_dict_msg)
     try:
         user = dict_msg['u']
         del dict_msg['u']

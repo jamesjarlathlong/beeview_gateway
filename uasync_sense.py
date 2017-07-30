@@ -17,11 +17,9 @@ class ZigbeeStreamWriter():
         self._transport = s.serial
     @asyncio.coroutine
     def network_awrite(self, buf, addr, frame_id):
-        print('network awriter')
         yield from asyncio.sleep(0)
         frameified = self.s.prepare_send('tx', frame_id = frame_id, data=buf,
                                     dest_addr_long=addr, dest_addr=b'\xff\xfe')
-        print('frameified: ', frameified)
         self._transport.write(frameified)
     def network_awrite_single(self, single, addr,frame_id):
         """
@@ -72,16 +70,6 @@ class KVQueue():
     def remove(self, _id):
         del self._qs[_id]
 
-def timed_gen(gen, user, key=None, node=None):
-    ts = []
-    while True:
-        try:
-            t, res = timeit(next)(gen)
-            ts.append(t)
-            yield res
-        except StopIteration:
-            break
-    print(ts, key, node)
 def timeit(method):
     def timed(*args, **kw):
         ts = time.time()
@@ -98,16 +86,30 @@ def timecoroutine(method):
         ex_time = te-ts
         return ex_time,result
     return timed
-def append_record(record):
-    with open('tx_stats', 'a') as f:
+def append_record(filename,record):
+    with open(filename, 'a') as f:
         json.dump(record, f)
-        f.write(os.linesep)
+        f.write('\n')
 def write_stats_to_file(method):
     def writestats(*args):
         stats = yield from method(*args)
-        append_record(stats)
+        append_record('tx_stats',stats)
         return stats
     return writestats
+def timed_gen(gen, user, key=None, node=None):
+    ts = []
+    while True:
+        try:
+            t, res = timeit(next)(gen)
+            ts.append(t)
+            yield res
+        except StopIteration:
+            break
+    print('timed gen**********',user,key,node)
+    if key:
+        append_record('px_stats',{'type':'reducer','ts':ts,'onkey':key,'job':user})
+    else:
+        append_record('px_stats',{'type':'mapper','ts':ts,'mapnum':node,'job':user})
 @timeit
 def benchmark1(size):
     def vec(size):
@@ -397,7 +399,6 @@ class ControlTasks:
         the message has sent before returning"""
         if not frame_id:
             frame_id = self.comm.id_counter()
-        print('about to write: ', byte_chunk)
         yield from self.comm.writer.network_awrite(byte_chunk, addr, frame_id)
         status,retries = yield from self.check_acknowledged(frame_id)
         print('status is: ',status,retries)
@@ -492,6 +493,7 @@ class ControlTasks:
     def benchmark(self):
         while True:
             data = yield from self.comm.bm_q.get()
+            print('running benchmark')
             t, res = benchmark1(data)
             self.most_recent_benchmark = t
             result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id(random_word()+'bnch'+str(data))}
@@ -500,9 +502,16 @@ class ControlTasks:
     def report_neighbours(self):
         while True:
             req = yield from self.comm.fn_queue.get()
+            print('got req')
+            def srv(num):
+                val = 99 if num=='Server' else num
+                return str(val)
+            def cmp(ne):
+                return srv(ne['target'])+'_'+srv(ne['value'])
             neighbors = self.neighbors
-            result_tx = {'res':(1,json.dumps({'rs':neighbors})),'u':self.add_id(random_word()+'rs')}
-            print('result_tx',result_tx)
+            cmped = [cmp(n) for n in neighbors]
+            whole_thing = ('.').join(cmped)
+            result_tx = {'res':(1,json.dumps({'rs':whole_thing})),'u':self.add_id(random_word()+'rs')}
             yield from self.node_to_node(result_tx, self.comm.address_book['Server'])
     @asyncio.coroutine
     def at_reader(self):
@@ -511,7 +520,6 @@ class ControlTasks:
             print('data: ', data)
             if data['command'] == b'FN':
                 payload = data['parameter']
-                print('payload: ',payload)
                 #find neighbor address
                 neighbor_node_addr = payload[2:10]
                 neighbor_number = self.comm.inverse_address(neighbor_node_addr)
@@ -519,7 +527,6 @@ class ControlTasks:
                 rssi = payload[-1]
                 upsert_data = {'source':self.ID,'target':neighbor_number,'value':rssi}
                 self.neighbors.append(upsert_data)
-                print('upsert_data:',upsert_data, self.neighbors)
     @asyncio.coroutine
     def find_neighbours(self):
         while True:

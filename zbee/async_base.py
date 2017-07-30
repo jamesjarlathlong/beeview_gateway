@@ -45,7 +45,7 @@ class XBeeAsync(XBeeBase):
         while True:
             #print('got called')
             msg = yield from self.wait_read_frame(dataq)
-            #print('wait frame is: ',msg)
+            print('wait frame is: ',msg)
             try:
                 rf = msg['rf_data']
                 data = json.loads(msg['rf_data'].decode('utf-8'))
