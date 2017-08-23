@@ -1,5 +1,9 @@
 import math
 import gc
+import cmath
+import random as urandom
+def conj(a):
+    return a.real-1j*a.imag
 class Vector(object):
     def __init__(self, *args):
         """ Create a vector, example: v = Vector(1,2) """
@@ -8,14 +12,16 @@ class Vector(object):
     def norm(self):
         """ Returns the norm (length, magnitude) of the vector """
         return math.sqrt(sum( comp**2 for comp in self ))
+    def cnorm(self):
+        return math.sqrt(sum((comp*conj(comp)).real for comp in self))
     def _zero_mean(self):
-    	mean = self.mean()
-    	zeroed = tuple(i-mean for i in self)
-    	return zeroed
+        mean = self.mean()
+        zeroed = tuple(i-mean for i in self)
+        return zeroed
     def zero_mean(self):
-    	return Vector(*self._zero_mean())
+        return Vector(*self._zero_mean())
     def mean(self):
-    	return sum(self)/len(self)      
+        return sum(self)/len(self)      
     def argument(self):
         """ Returns the argument of the vector, the angle clockwise from +y."""
         arg_in_rad = math.acos(Vector(0,1)*self/self.norm())
@@ -29,8 +35,8 @@ class Vector(object):
         normed = tuple( comp/norm for comp in self )
         return Vector(*normed)
     def zero_mean_normalize(self):
-    	zeroed = self.zero_mean()
-    	return zeroed.normalize()
+        zeroed = self.zero_mean()
+        return zeroed.normalize()
     def rotate(self, *args):
         """ Rotate this vector. If passed a number, assumes this is a 
             2D vector and rotates by the passed value in degrees.  Otherwise,
@@ -72,7 +78,7 @@ class Vector(object):
         for idx,row in enumerate(matrix):
             product[idx] = Vector(*row)*self
             try:
-                gc.mem_free()
+                gc.collect()
             except:
                 pass
         return Vector(*product)
@@ -127,8 +133,8 @@ class Vector(object):
         subbed = tuple( a - b for a, b in zip(self, other) )
         return Vector(*subbed)
     def __pow__(self, other):
-    	powed = tuple(a**other for a in self)
-    	return Vector(*powed)
+        powed = tuple(a**other for a in self)
+        return Vector(*powed)
     
     def __iter__(self):
         return iter(self.values)#.__iter__()
@@ -142,15 +148,57 @@ class Vector(object):
     def __repr__(self):
         return str(self.values)
 def change_idx(vector, idx, new_value):
-	copied = list(vector)
-	copied[idx] = new_value
-	return Vector(*copied)
+    copied = list(vector)
+    copied[idx] = new_value
+    return Vector(*copied)
 
 def get_column(nested_lst, idx):
-	return [i[idx] for i in nested_lst]
+    return [i[idx] for i in nested_lst]
 
 def get_column_as_vec(nested_lst, idx):
-	return Vector(*get_column(nested_lst, idx))
+    return Vector(*get_column(nested_lst, idx))
+
+def radix2(x):
+    N = len(x)
+    if N <= 1: return x
+    even = radix2(x[0::2])
+    odd =  radix2(x[1::2])
+    T= [cmath.exp(-2j*cmath.pi*k/N)*odd[k] for k in range(N//2)]
+    return [even[k] + T[k] for k in range(N//2)] + \
+           [even[k] - T[k] for k in range(N//2)]
+def zero_mean(x):
+    a = Vector(*x)
+    return a._zero_mean()
+def fft(x):
+    return radix2(list(zero_mean(x)))
+def rand_unif():
+    return 1-2*urandom.getrandbits(8)/255
+def spectral_mat(ws):
+    one_row = lambda i,lst: [i*conj(e) for e in lst]
+    all_rows = lambda lst:[one_row(i,lst) for i in lst]
+    return all_rows(ws)
+def abs_max(v):
+     ab =[abs(i) for i in v]
+     return v[ab.index(max(ab))]
+def scale(res):
+    big = abs_max(res)
+    return [i/big for i in res]
+def pagerank(lst_of_lists, max_iter = 1000):
+    n = len(lst_of_lists)
+    initial = Vector(*[rand_unif()+1j*rand_unif() for i in range(n)])
+    xi = Vector(*initial)
+    for n in range(max_iter):
+        print('iteration: ',n)
+        new_initial = Vector(*xi)
+        xi=new_initial.matrix_mult(lst_of_lists)
+        l_norm = xi.cnorm()
+        xi = [i/l_norm for i in xi]
+        diff = (new_initial-xi).cnorm()
+        print('diff: ',diff)
+        if diff<1e-10:
+            print('converged: ',new_initial, xi)
+            break
+    return scale(xi)
 
 
 
