@@ -8,9 +8,13 @@ import serial
 import os
 import networking
 from algorithms import np
+from algorithms import basis_pursuit as bp
+from algorithms import fourier_basis as ft
 import random as urandom
-
-
+def argmax(complex_list):
+    abs_list = list(map(abs,complex_list))
+    idx = abs_list.index(max(abs_list))
+    return idx,complex_list[idx]
 class ZigbeeStreamWriter():
     def __init__(self, s):
         self.s = s
@@ -110,6 +114,15 @@ def timed_gen(gen, user, key=None, node=None):
         append_record('px_stats',{'type':'reducer','ts':ts,'onkey':key,'job':user})
     else:
         append_record('px_stats',{'type':'mapper','ts':ts,'mapnum':node,'job':user})
+def macrotimer(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        user = yield from method(*args, **kw)
+        te = time.time()
+        ex_time = te-ts
+        append_record('macro',{'u':user,'t':ex_time})
+        return user
+    return timed
 @timeit
 def benchmark1(size):
     def vec(size):
@@ -226,6 +239,16 @@ def flatten(L):
             yield item
 def unroll(node_list):
     return list(flatten(node_list))
+
+
+def shortnodes(i):
+    confe = """class SenseReduce:
+    def __init__(self):
+        self.sensenodes = [17,18,29,55,31,46,39,22,15,64,68,69]
+        self.mapnodes = [17,18,29,55,31,46,39,22,15,64,68]
+        self.reducenodes = {}
+        self.l = 512""".format(i)
+    return confe
 class ControlTasks:
     SLEEP_READY = 0
     BUSY = 1
@@ -247,6 +270,36 @@ class ControlTasks:
         self.sleep_handlers = {ControlTasks.IDLE_SLEEP: self.idle_sleep, ControlTasks.DEEP_SLEEP: self.deep_sleep} 
         self.completed_msgs = {}
         self.neighbors=[]
+        self.shortcut = {"fdd_single":"""
+    def sampler(self,node):
+        acc = yield from node.testaccel(512)
+        return (node.ID,acc)
+    def mapper(self,node,d):
+        fts = np.fft(d[1]['x'])
+        c = lambda d: (d.real,d.imag)
+        yield(0,(d[0],c(fts[6])))
+    def reducer(self,node,k,vs):
+        ws = [complex(*i[1]) for i in vs]
+        G = np.spectral_mat(ws)
+        eig = np.pagerank(G)
+        c = lambda d: (d.real,d.imag)
+        ms = [(vs[idx][0],c(el)) for idx,el in enumerate(eig)]
+        yield(k,ms)""","dfdd":"""
+    def sampler(self,node):
+        acc = yield from node.testaccel(512)
+        return (node.ID,acc)
+    def mapper(self,node,d):
+        fts = np.fft(d[1]['x'])
+        c = lambda d: (d.real,d.imag)
+        k = hash(node.ID)%4
+        yield(k,(d[0],c(fts[6])))
+    def reducer(self,node,k,vs):
+        ws = [complex(*i[1]) for i in vs]
+        G = np.spectral_mat(ws)
+        eig = np.pagerank(G)
+        c = lambda d: (d.real,d.imag)
+        ms = [(vs[idx][0],c(el)) for idx,el in enumerate(eig)]
+        yield(node.ID,ms)"""}
     def package(self, job_class, time_received, user):
         #======================#sense stage#======================#    
         exec_time, curried_runfunc = self.package_senser(job_class.sampler,
@@ -352,7 +405,23 @@ class ControlTasks:
         #exec(source_code) 
         #curried_runfunc = {'func':run_func,'arg': mapper,'u':user } #a dict because micropython doesnt like currying a generator    
         return run_func, mapper
-    
+    @asyncio.coroutine
+    def testaccel(self, sample_length):
+        fname = '192.168.123.99.json'
+        print('opening: ',fname)
+        i=0
+        while True:
+            try:
+                with open(fname) as json_data:
+                    d = json.loads(json_data.read())
+                    yield from asyncio.sleep(0)
+                    trimmed = {k:v[0:sample_length] for k,v in d.items()}
+                    return trimmed
+            except MemoryError:
+                gc.collect()
+                i+=1 
+                trimmed = []
+        return trimmed
     def package_senser(self, senser, exec_time, user):
         @asyncio.coroutine
         def sense(senss):
@@ -373,13 +442,22 @@ class ControlTasks:
         #exec(reduce_code)
         return reduce_func, reducer#(locals()['reducer'])
         #curried_runfunc = {'reduce_func':reduce_func,'arg': (locals()['reducer']) }    
-    
-    def class_definer(self, source_code):
+    def monkey_patch(self,sid_code, job_class):
+        monkey_class ="class Monkey:\n   "+sid_code
+        exec(monkey_class)
+        monkey = locals()['Monkey']
+        job_class.sampler = monkey.sampler
+        job_class.mapper = monkey.mapper
+        job_class.reducer = monkey.reducer
+        return job_class
+    def class_definer(self, source_code,shortcut = None):
         """given the user specified source code for the
         SenseReduce class, create this class from the string of code"""
         exec(source_code)
-        job_class = locals()['SenseReduce']()
-        return job_class
+        job_class = locals()['SenseReduce']
+        if shortcut:
+            job_class = self.monkey_patch(shortcut, job_class)
+        return job_class() 
     @asyncio.coroutine
     def multiple_chunk_assembler(self):
         while True:
@@ -419,7 +497,7 @@ class ControlTasks:
         if address == self_address:
             if 'kv' in message:
                 print('node to node: ', message)
-                message['u'] = message['u'][2::]#don't need nodeid concat
+                message['u'] = message['u'][4::]#don't need nodeid concat
             if 'res' in message:
                 message['res'] = json.loads(message['res'][1])
             self.message_to_queue(message)
@@ -479,6 +557,10 @@ class ControlTasks:
         acknowledged. If no ack within 3 seconds, return failed"""
         counter = 0
         while (msg_id not in self.completed_msgs):# and (counter<20):
+<<<<<<< HEAD
+=======
+            #print(msg_id,'not ack yet: ',  self.completed_msgs)
+>>>>>>> a81b5d605f1dfffc664409ebafc83801c777290e
             yield from asyncio.sleep(0.05)
             counter+=1
         try:
@@ -576,7 +658,6 @@ class ControlTasks:
                     self.acknowledge(msg)  
                 #add handling of AT command responses here e.g. finding neighbors
                 if msg['id'] in ['at_response', 'remote_at_response']:
-                    print('putting on at')
                     self.comm.at_queue.put_nowait(msg)  
     @asyncio.coroutine    
     def function_definer(self):
@@ -587,8 +668,15 @@ class ControlTasks:
             print('got a function: ', data)
             time_received = self.eventloop.time()
             class_def = data['f']
+            if isinstance(class_def, tuple):
+                sid = class_def[1]
+                class_def = shortnodes(class_def[0])
+            else:
+                sid = None
             user = data['u']
-            job_class = self.class_definer(class_def)
+            shortcut_code = self.shortcut.get(sid)
+            print('got the shortcut: ',shortcut_code)
+            job_class = self.class_definer(class_def,shortcut =shortcut_code)
             try:
                 repeat = job_class.repeat
             except AttributeError:
@@ -630,11 +718,11 @@ class ControlTasks:
                         print('starting mapper',idx)
                         data = yield from self.comm.sense_queue.get(str(idx)+'_'+curried_func['u'])
                         print('got data')
-                        yield from self.map_worker(curried_func, data, idx)
+                        user = yield from self.map_worker(curried_func, data, idx)
                         print('finished mapper')
                 if self.comm.ID in curried_func['reduce_nodes']:
                     print('reducing')
-                    yield from self.reduce_worker(curried_func)
+                    user =yield from self.reduce_worker(curried_func)
                     print('reduced')
                 self.in_map = False                                                   
             else:   
@@ -651,10 +739,12 @@ class ControlTasks:
         idx = hash(key)%len(reducer_ids)
         return reducer_ids[idx]
     @asyncio.coroutine
+    @macrotimer
     def map_worker(self, curried_func, map_data, map_idx):
         reduce_nodes= curried_func['reduce_nodes']
         job_nodeid = self.add_id(curried_func['u']) 
         gen = curried_func['map_func'](curried_func['map_arg'], map_data) #generator function
+        counter = 0
         for j in timed_gen(gen, curried_func['u'], node=map_idx):
             print('j is: ',j)
             if isinstance(j, asyncio.Future):
@@ -664,16 +754,19 @@ class ControlTasks:
                     key,value = j
                     dest_id = self.partitioner(key, reduce_nodes)
                     reduce_dest = self.comm.address_book[dest_id]
-                    result = {'kv':j, 'u':job_nodeid}
+                    prefix = format(counter,'02d')
+                    result = {'kv':j, 'u':prefix+job_nodeid}
                     yield from self.node_to_node(result, reduce_dest)
+                    counter+=1
             # notify end of map function to reduce node
             #end_message = bytes(json.dumps ( {'kv_pair':("MAP_DONE",0), 'u':curried_func['u']} ), 'ascii')
         reduce_node_addresses = [self.comm.address_book[i] for i in reduce_nodes]
         for dest in reduce_node_addresses:
-            end_message = {'kv':("MAP_DONE",0), 'u':job_nodeid}
+            prefix = format(counter,'02d')
+            end_message = {'kv':("MAP_DONE",random_word()), 'u':prefix+job_nodeid}
             yield from self.node_to_node(end_message, dest)
         self.comm.sense_queue.remove(str(map_idx)+'_'+curried_func['u'])       
-        return
+        return 'm'+curried_func['u']
     #@asyncio.coroutine
     def get_groupedby(self,q):
         first_pair = q.get_nowait()
@@ -693,6 +786,7 @@ class ControlTasks:
         return list_kv_pairs,key
     
     @asyncio.coroutine
+    @macrotimer
     def reduce_worker(self,curried_func):
         print('called reduce worker')
         user = curried_func['u']
@@ -704,13 +798,15 @@ class ControlTasks:
         #check if all num_mappers have given a map_done message
         results = {}
         print('starting loop')
+        already_seen = set()
         while i<num_mappers:
-            yield from asyncio.sleep(0.05)
-            print('reading from kvq: ',self.comm.kv_queue._qs)
+            yield from asyncio.sleep(0.2)
             kv = yield from self.comm.kv_queue.get(user)
             if kv[0].x == "MAP_DONE":
-                print('got map done from ',i)  
-                i+=1
+                print('got map done from ',i)
+                if kv[1] not in already_seen:  
+                    already_seen.add(kv[1])
+                    i+=1
             else:
                 yield from self.comm.kv_queue.put(kv, user)
         #getting here means all map functions are finished- q size wont change in this function
@@ -735,7 +831,7 @@ class ControlTasks:
         yield from self.node_to_node(result_tx, self.comm.address_book['Server'])
         print('map-reduce finished')
         self.comm.kv_queue.remove(user) 
-        return
+        return 'r'+curried_func['u']
                 
     @asyncio.coroutine
     def allow_read_data(self):

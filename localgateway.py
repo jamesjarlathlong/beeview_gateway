@@ -33,7 +33,7 @@ def fn_runner(controller, nodenumbers):
     packet = {'fn':0,'u':randomword(4)}
     for nodenumber in nodenumbers:
         yield from controller.node_to_node(packet, controller.comm.address_book[nodenumber])
-        yield from asyncio.sleep(5) #allow time to settle down
+        yield from asyncio.sleep(15) #allow time to settle down
     print('sent')
 def result_prep(data):
     print('got a result: ',data)
@@ -54,7 +54,7 @@ def nine_to_zero(num):
         return 0
     else:
         return num
-benchmark_own = {}
+benchmark_own = {'100':0.02}
 def benchmark_prep(data):
     print('in bench: ',data,benchmark_own)
     uname = data['u']
@@ -62,7 +62,8 @@ def benchmark_prep(data):
     size = uname.split('bnch')[-1] #'92randbnch10'
     t = data['res']['t']
     if node == '99' or node==99:
-        benchmark_own[size]=t
+        #benchmark_own[size]=t
+        t = 0.02
     baseline = benchmark_own.get(size,0)
     if baseline:
         comped = round(baseline/t ,2)
@@ -82,7 +83,8 @@ def res_reader(socket, q):
         if is_benchmark(data):
             prepped = benchmark_prep(data)
             print('emitting: ',prepped)
-            yield from socket.emit('BM', prepped)
+            if prepped:
+                yield from socket.emit('BM', prepped)
         elif is_neighbors(data):
             node = int(data['u'][0:2])
             entry = data['res']['rs']
@@ -95,6 +97,11 @@ def res_reader(socket, q):
             yield from socket.emit('full_result_return', result_prep(data))
 def uqify(lst):
     return list(set(lst))
+def red_last(red,lst):
+    for i in red:
+        lst.remove(i)
+        lst.append(i)
+    return lst
 #@asyncio.coroutine
 def no_zeroes(lst):
     def translater(num):
@@ -111,6 +118,43 @@ def replace_nodes(codestring, newsense, newmap, newreduce):
     with_map = re.sub(r'mapnodes.*', r'mapnodes = {}'.format(newmap), with_sense)
     with_red = re.sub(r'reducenodes.*', r'reducenodes = {}'.format(newreduce), with_map)
     return with_red
+scuts = {"\n    def sampler(self,node):\n        acc = yield from node.testaccel(512)\n        return (node.ID,acc)\n    def mapper(self,node,d):\n        fts = np.fft(d[1]['x'])\n        c = lambda d: (d.real,d.imag)\n        yield(0,(d[0],c(fts[6])))\n    def reducer(self,node,k,vs):\n        ws = [complex(*i[1]) for i in vs]\n        G = np.spectral_mat(ws)\n        eig = np.pagerank(G)\n        c = lambda d: (round(d.real,2),round(d.imag,2))\n        ms = [(vs[idx][0],c(el)) for idx,el in enumerate(eig)]\n        yield(k,ms)":"fdd_single"
+        ,"""
+    def sampler(self,node):
+        acc = yield from node.testaccel(512)
+        return (node.ID,acc)
+    def mapper(self,node,d):
+        fts = np.fft(d[1]['x'])
+        c = lambda d: (d.real,d.imag)
+        k = hash(node.ID)%4
+        yield(k,(d[0],c(fts[6])))
+    def reducer(self,node,k,vs):
+        ws = [complex(*i[1]) for i in vs]
+        G = np.spectral_mat(ws)
+        eig = np.pagerank(G)
+        c = lambda d: (round(d.real,2),round(d.imag,2))
+        ms = [(vs[idx][0],c(el)) for idx,el in enumerate(eig)]
+        yield(k,ms)""":"dfdd"}
+pat = re.compile(r'\s+')
+shortcuts = {pat.sub('',k):v for k,v in scuts.items()}
+def splitter(code,k):
+    split = code.split(k)
+    return split[0], k+split[1]
+def check_shortcutted(optimised_code,rednode=None):
+    #split into top and bottom
+    top, bottom = splitter(optimised_code,"\n    def sampler(self,node):")
+    #if bottom text in shortcutrs
+    nospaces = pat.sub('',bottom)
+    print('bottom: ',shortcuts,nospaces)
+    sid = shortcuts.get(nospaces)
+    if sid:
+        print('got sid: ',sid)
+        return sid, top
+    else: 
+        print('no sid: ',bottom)
+        return None,optimised_code
+def dis(sid,data):
+    print('lost connection')
 class QueryWrapper:
     def __init__(self,controller,loop):
         self.controller = controller
@@ -119,9 +163,11 @@ class QueryWrapper:
         nodenumbers = data['nodes']
         size = data['size']
         print('calling benchmark runner: ',data)
+        await sio.disconnect(sid)
         await benchmarker_runner(self.controller, size, nodenumbers)
     async def run_finder(self, sid, data):
         nodenumbers = data['nodes']
+        await sio.disconnect(sid)
         await fn_runner(self.controller, nodenumbers)
     async def fetch(self,client, data):
         async with client.post("http://192.168.1.200:5000/solve", data =data) as resp:
@@ -144,6 +190,7 @@ class QueryWrapper:
         post_data = data={'user': userid, 'code': query['code']
                          ,'rssi':query.get('rssi'), 'px':query.get('px')}
         print('sending to dag engine')
+        sio.disconnect(sid)
         txt_response = await self.post_solve(post_data)
         response = json.loads(txt_response)
         optimal_sensenodes = no_zeroes(response['sol']['S'])
@@ -151,13 +198,21 @@ class QueryWrapper:
         optimal_rednodes = no_zeroes(response['sol']['R'])
         optimal_code = replace_nodes(query['code'], optimal_sensenodes,optimal_mapnodes,optimal_rednodes)
         print('code: ',optimal_code)
+        sid,trunc_code = check_shortcutted(optimal_code)
         await asyncio.sleep(0)
-        all_nodes = uqify(optimal_mapnodes +optimal_mapnodes+optimal_rednodes)
-        send_data = {'u':userid,'f':optimal_code}
+        nodes = uqify(optimal_rednodes+optimal_sensenodes +optimal_mapnodes)
+        all_nodes = red_last(optimal_rednodes, nodes)
+        send_data = {'u':userid,'f':trunc_code}
+        if sid:
+            send_data['f']=(optimal_rednodes,sid)
         #write record to file
+        response['job']=userid
+        response['code']=optimal_code
         usense.append_record('dag_stats',response)
         await asyncio.sleep(0)
+        print('node!: ',all_nodes)
         for node in all_nodes:
+            print('sending to: ',node)
             await self.controller.node_to_node(send_data, controller.comm.address_book[node])
             await asyncio.sleep(0)
 async def heartbeat():

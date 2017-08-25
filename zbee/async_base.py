@@ -8,6 +8,20 @@ from zbee.python2to3 import byteToInt, intToByte
 def assemble_result(pieces):
     """pieces is a list of result messages that need to be pieced together before returning"""
     return {k:v for sub in pieces for k,v in sub.items()}
+def parse_raw(rf_data):
+    """rf_data is like kv_whateverdata1203jjlong"""
+    print('parsing: ', rf_data)
+    try:
+        chunk_type = rf_data.split('_')[0]
+        without_chunk_type = rf_data.replace(chunk_type+'_', '', 1)
+        data_size = 17
+        data = without_chunk_type[0:data_size].strip('#')
+        c= int(data[data_size:data_size+2])
+        idx = int(data[data_size+2:data_size+4])
+        uname = int(data[data_size+4::])
+        return {chunk_type:data, 'c':c,'n':idx, 'u':uname}
+    except:
+        return {}
 class XBeeAsync(XBeeBase):
     """Subclass of XBeeBase that fits with asynchronous event loop"""
     @asyncio.coroutine
@@ -21,7 +35,7 @@ class XBeeAsync(XBeeBase):
             msg = yield from intermediate_output_q.get()
             #blah blah blah-ok i think this is a full packet so try to get rf data
             #then try to get 'res' field
-            data = json.loads(msg.get('rf_data',"{}"))
+            data = msg.get('rf_data')
             res_chunk = data.get('res')
             if res_chunk:#exists put in dictionary
                 #now check if full pieces
@@ -48,7 +62,7 @@ class XBeeAsync(XBeeBase):
             print('wait frame is: ',msg)
             try:
                 rf = msg['rf_data']
-                data = json.loads(msg['rf_data'].decode('utf-8'))
+                data = parse_raw(json.loads(msg['rf_data'].decode('utf-8')))
                 try:
                     idx = data['n']
                     del data['n']
