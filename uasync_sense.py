@@ -478,8 +478,7 @@ class ControlTasks:
         """check if the message associated with msg_id was 
         acknowledged. If no ack within 3 seconds, return failed"""
         counter = 0
-        while (msg_id not in self.completed_msgs) and (counter<20):
-            #print(msg_id,'not ack yet: ',  self.completed_msgs)
+        while (msg_id not in self.completed_msgs):# and (counter<20):
             yield from asyncio.sleep(0.05)
             counter+=1
         try:
