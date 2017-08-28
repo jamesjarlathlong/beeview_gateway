@@ -27,6 +27,7 @@ class XBeeAsync(XBeeBase):
                 #now check if full pieces
                 num_reducers = res_chunk[0]
                 reduce_data = json.loads(res_chunk[1])
+                print('res chunk: ',reduce_data)
                 username_job = data['u']
                 previous = multiple_accumulator.get(username_job) 
                 if not previous:
@@ -45,7 +46,6 @@ class XBeeAsync(XBeeBase):
         while True:
             #print('got called')
             msg = yield from self.wait_read_frame(dataq)
-            print('wait frame is: ',msg)
             try:
                 rf = msg['rf_data']
                 data = json.loads(msg['rf_data'].decode('utf-8'))
@@ -69,7 +69,8 @@ class XBeeAsync(XBeeBase):
                         pass
                     if chunk_type in ['kv']:
                         print('got a kv: ', job_id, data) 
-                        base_job_id = job_id[2::] # ie job_id = '91abcde'                    
+                        #base_job_id = job_id[2::] # ie job_id = '91abcde'-actually even moreso it should have one per yield  
+                        base_job_id = job_id[4::]             
                     try:
                         chunk_def[job_id]
                         #print('already a list')
@@ -84,6 +85,7 @@ class XBeeAsync(XBeeBase):
                     chunk_def[job_id][chunk_type][idx] = (idx, data[chunk_type])
                     non_empty = [i for i in chunk_def[job_id][chunk_type] if i]                        
                     if len(non_empty) == chk:
+                        print('matching length: ',non_empty)
                         chunk_def_list = sorted( chunk_def[job_id][chunk_type] )
                         chunk = ''.join( [i[1] for i in chunk_def_list] )
                         try:
