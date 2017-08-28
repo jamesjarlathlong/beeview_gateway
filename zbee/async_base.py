@@ -10,17 +10,20 @@ def assemble_result(pieces):
     return {k:v for sub in pieces for k,v in sub.items()}
 def parse_raw(rf_data):
     """rf_data is like kv_whateverdata1203jjlong"""
-    print('parsing: ', rf_data)
+    print('parsing: ',rf_data)
+    data_size=17
     try:
         chunk_type = rf_data.split('_')[0]
         without_chunk_type = rf_data.replace(chunk_type+'_', '', 1)
-        data_size = 17
         data = without_chunk_type[0:data_size].strip('#')
-        c= int(data[data_size:data_size+2])
-        idx = int(data[data_size+2:data_size+4])
-        uname = int(data[data_size+4::])
-        return {chunk_type:data, 'c':c,'n':idx, 'u':uname}
-    except:
+        c= int(without_chunk_type[data_size:data_size+2])
+        idx = int(without_chunk_type[data_size+2:data_size+4])
+        uname = without_chunk_type[data_size+4::]
+        d = {chunk_type:data, 'c':c,'n':idx, 'u':uname}
+        print('d: ',d)
+        return d
+    except Exception as e:
+        print('e: ',e)
         return {}
 class XBeeAsync(XBeeBase):
     """Subclass of XBeeBase that fits with asynchronous event loop"""
@@ -33,10 +36,11 @@ class XBeeAsync(XBeeBase):
         multiple_accumulator = {}
         while True:
             msg = yield from intermediate_output_q.get()
+            print('got a intermediate msg: ', msg)
             #blah blah blah-ok i think this is a full packet so try to get rf data
             #then try to get 'res' field
-            data = msg.get('rf_data')
-            res_chunk = data.get('res')
+            data = json.loads(msg.get('rf_data','{}'))
+            res_chunk = data.get('res',None)
             if res_chunk:#exists put in dictionary
                 #now check if full pieces
                 num_reducers = res_chunk[0]
