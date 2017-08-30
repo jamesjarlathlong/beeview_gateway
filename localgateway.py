@@ -19,15 +19,10 @@ def benchmarker_runner(controller, size, nodenumbers):
         yield from controller.node_to_node(packet, controller.comm.address_book[nodenumber])
         yield from asyncio.sleep(5)#allow time to settle down
 @asyncio.coroutine
-def bandtest_runner(controller):
-    yield from asyncio.sleep(30)
-    candidates = [i for i in controller.neighbors if i['value']<65]
-    print('candidates: ',candidates)
-    for entry in candidates:
-        node = entry['target']
-        statpackage = yield from controller.bandwidth_measurer(node)
-        yield from asyncio.sleep(5)
-    print('done bandtesting')
+def bw_runner(controller, nodenumbers):
+    for nodenumber in nodenumbers:
+        statpackage = yield from controller.bandwidth_measurer(nodenumber)
+        yield from asyncio.sleep(0) #allow time to settle down
 @asyncio.coroutine
 def fn_runner(controller, nodenumbers):
     packet = {'fn':0,'u':randomword(4)}
@@ -62,12 +57,12 @@ def benchmark_prep(data):
     size = uname.split('bnch')[-1] #'92randbnch10'
     t = data['res']['t']
     if node == '99' or node==99:
-        #benchmark_own[size]=t
-        t = 0.02
+        benchmark_own[size]=t
+        #t = 0.02
     baseline = benchmark_own.get(size,0)
     if baseline:
         comped = round(baseline/t ,2)
-        return {'node':nine_to_zero(node),'t':comped,'size':int(size),'exists':1}
+        return {'node':nine_to_zero(node),'t':comped,'raw_t':t, 'size':int(size),'exists':1}
 def is_benchmark(data):
     return 'bnch' in data['u']
 def is_neighbors(data):
@@ -169,8 +164,13 @@ class QueryWrapper:
         nodenumbers = data['nodes']
         await sio.disconnect(sid)
         await fn_runner(self.controller, nodenumbers)
+    async def run_bw(self, sid, data):
+        print('running bw')
+        nodenumbers = data['nodes']
+        await sio.disconnect(sid)
+        await bw_runner(self.controller, nodenumbers)
     async def fetch(self,client, data):
-        async with client.post("http://192.168.1.200:5000/solve", data =data) as resp:
+        async with client.post("http://127.0.0.1:5000/solve", data =data) as resp:
             print('got resp: ',resp)
             assert resp.status == 200
             return await resp.text()
@@ -213,7 +213,7 @@ class QueryWrapper:
         print('node!: ',all_nodes)
         for node in all_nodes:
             print('sending to: ',node)
-            await self.controller.node_to_node(send_data, controller.comm.address_book[node])
+            #await self.controller.node_to_node(send_data, controller.comm.address_book[node])
             await asyncio.sleep(0)
 async def heartbeat():
     while True:
@@ -236,6 +236,7 @@ if __name__ == "__main__":
     sio.on('queryToGateway')(QueryWrapper(controller,loop).query_passer)
     sio.on('runbenchmark')(QueryWrapper(controller,loop).run_benchmark)
     sio.on('runfinder')(QueryWrapper(controller,loop).run_finder)
+    sio.on('runbandwidth')(QueryWrapper(controller,loop).run_bw)
     tasks = [controller.multiple_chunk_assembler(), controller.radio_listener()
             ,controller.queue_placer() ,res_reader(sio, controller.comm.res_queue)
             ,controller.at_reader(),controller.function_definer(), controller.worker()
