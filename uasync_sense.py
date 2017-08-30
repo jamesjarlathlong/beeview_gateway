@@ -155,7 +155,7 @@ class Comm:
             pass
         #self.extint = pyb.ExtInt('X10', pyb.ExtInt.IRQ_RISING_FALLING, pyb.Pin.PULL_NONE, cb)
         #self.uart = pyb.UART(1,9600, read_buf_len=1024)
-        self.uart = serial.Serial('/dev/ttyUSB0', 9600)
+        self.uart = serial.Serial('/dev/ttyUSB1', 9600)
          #allocating 512 bytes to the uart buffer -  alot? maybe but we have ~128 kB of RAM
         self.ZBee = ZigBee(self.uart, escaped =False)
         self.ZBee.send('at', command=b'NO',parameter=b'\x04')
@@ -178,7 +178,7 @@ class Comm:
                             60: b'\x00\x13\xa2\x00AZ\xe8&',61: b'\x00\x13\xa2\x00A\x05F\x97',
                             63: b'\x00\x13\xa2\x00A\x05H\x91',64: b'\x00\x13\xa2\x00@\xdasm',
                             68: b'\x00\x13\xa2\x00@\xdasl',69: b'\x00\x13\xa2\x00A\x05H\x8b',
-                            95: b'\x00\x13\xa2\x00@\xdas\x95',96: b'\x00\x13\xa2\x00@\xdasd'}
+                            96: b'\x00\x13\xa2\x00@\xdas\x95',95: b'\x00\x13\xa2\x00@\xdasd'}
     def id_counter(self):
         if self.zbee_id<255:
             self.zbee_id+=1
@@ -507,7 +507,7 @@ class ControlTasks:
             return stats
     @asyncio.coroutine
     def bandwidth_measurer(self,nodenum):
-        test_data = {'test':[urandom.getrandbits(4) for i in range(100)]}
+        test_data = {'test':[urandom.getrandbits(4) for i in range(200)], 'u':3*random_word()}
         print('sending bandtest')
         stat_package = yield from self.node_to_node(test_data, self.comm.address_book[nodenum])
         return stat_package
@@ -557,10 +557,6 @@ class ControlTasks:
         acknowledged. If no ack within 3 seconds, return failed"""
         counter = 0
         while (msg_id not in self.completed_msgs):# and (counter<20):
-<<<<<<< HEAD
-=======
-            #print(msg_id,'not ack yet: ',  self.completed_msgs)
->>>>>>> a81b5d605f1dfffc664409ebafc83801c777290e
             yield from asyncio.sleep(0.05)
             counter+=1
         try:
