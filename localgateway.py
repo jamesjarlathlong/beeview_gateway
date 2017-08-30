@@ -12,9 +12,9 @@ import re
 def randomword(length):
    return ''.join(random.choice(string.ascii_lowercase) for i in range(length))
 @asyncio.coroutine
-def benchmarker_runner(controller, size, nodenumbers):
+def benchmarker_runner(controller, size, nodenumbers, cat):
     #pretty straightforward
-    packet = {'bm':size,'u':randomword(4)}
+    packet = {cat:size,'u':randomword(4)}
     for nodenumber in nodenumbers:
         yield from controller.node_to_node(packet, controller.comm.address_book[nodenumber])
         yield from asyncio.sleep(5)#allow time to settle down
@@ -54,7 +54,9 @@ def benchmark_prep(data):
     print('in bench: ',data,benchmark_own)
     uname = data['u']
     node = int(uname[0:2])
-    size = uname.split('bnch')[-1] #'92randbnch10'
+    cat_size = uname.split('bnch')[-1] #'92randbnch110'
+    cat = cat_size[0]
+    size = cat_size[1::]
     t = data['res']['t']
     if node == '99' or node==99:
         benchmark_own[size]=t
@@ -62,7 +64,7 @@ def benchmark_prep(data):
     baseline = benchmark_own.get(size,0)
     if baseline:
         comped = round(baseline/t ,2)
-        return {'node':nine_to_zero(node),'t':comped,'raw_t':t, 'size':int(size),'exists':1}
+        return {'node':nine_to_zero(node),'t':comped,'raw_t':t,'bm':int(cat),'size':int(size),'exists':1}
 def is_benchmark(data):
     return 'bnch' in data['u']
 def is_neighbors(data):
@@ -157,9 +159,10 @@ class QueryWrapper:
     async def run_benchmark(self, sid, data):
         nodenumbers = data['nodes']
         size = data['size']
+        cat = data['cat']
         print('calling benchmark runner: ',data)
         await sio.disconnect(sid)
-        await benchmarker_runner(self.controller, size, nodenumbers)
+        await benchmarker_runner(self.controller, size, nodenumbers, cat)
     async def run_finder(self, sid, data):
         nodenumbers = data['nodes']
         await sio.disconnect(sid)
