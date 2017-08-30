@@ -124,12 +124,27 @@ def macrotimer(method):
         return user
     return timed
 @timeit
-def benchmark1(size):
+def benchmark_runner(size, bm_fun):
+    bm_name(size)
+    return
+def bm1(size):
     def vec(size):
         return [urandom.getrandbits(8)/100 for i in range(size)]    
     mat = (vec(size) for i in range(size))
     v = np.Vector(*vec(size))
     res = v.gen_matrix_mult(mat)
+    return 
+def bm2(size):
+    def vec(size):
+        return [urandom.getrandbits(8)/100 for i in range(size)]    
+    mat = (vec(size) for i in range(size))
+    res = np.pagerank(mat)
+    return
+def bm3(size):
+    def vec(size):
+       return [urandom.getrandbits(8)/100 for i in range(size)]    
+    v = vec(size)
+    ft = np.fft(v)
     return
 def random_word():
     return str(urandom.getrandbits(12))
@@ -570,10 +585,13 @@ class ControlTasks:
     def benchmark(self):
         while True:
             data = yield from self.comm.bm_q.get()
+            b_type = [k for k in data if k in ('b1','b2','b3')][0]
+            size = data[b_type]
+            func_translation = {'b1':b1,'b2':b2,'b3':b3}
             print('running benchmark')
-            t, res = benchmark1(data)
+            t, res = benchmark_runner(size, func_translation[b_type])
             self.most_recent_benchmark = t
-            result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id(random_word()+'bnch'+str(data))}
+            result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id(random_word()+'bnch'+b_type[1]+str(size))}
             yield from self.node_to_node(result_tx, self.comm.address_book['Server'])
     @asyncio.coroutine
     def report_neighbours(self):
@@ -621,7 +639,7 @@ class ControlTasks:
     def s_to_queue(self, data): 
         self.comm.sense_queue.put_nowait(data['s'], data['u'])
     def bm_to_queue(self, data):
-        self.comm.bm_q.put_nowait(data['bm'])
+        self.comm.bm_q.put_nowait(data)
     def fn_to_queue(self, data):
         self.comm.fn_queue.put_nowait(data['fn'])
     def kv_to_queue(self, data):
@@ -632,7 +650,9 @@ class ControlTasks:
         queue_map = {'f':self.f_to_queue,
                      'kv':self.kv_to_queue,
                      's':self.s_to_queue
-                     ,'bm':self.bm_to_queue
+                     ,'b1':self.bm_to_queue
+                     ,'b2':self.bm_to_queue
+                     ,'b3':self.bm_to_queue
                      ,'res':self.res_to_queue
                      ,'fn':self.fn_to_queue}
         matches = [k for k in data if k in queue_map]
