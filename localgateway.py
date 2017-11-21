@@ -9,6 +9,7 @@ import random
 import string
 import requests
 import re
+
 def randomword(length):
    return ''.join(random.choice(string.ascii_lowercase) for i in range(length))
 @asyncio.coroutine
@@ -50,21 +51,24 @@ def nine_to_zero(num):
     else:
         return num
 benchmark_own = {'100':0.02}
+benches = []
 def benchmark_prep(data):
-    print('in bench: ',data,benchmark_own)
+    print('in bench: ',data, benchmark_own)
     uname = data['u']
     node = int(uname[0:2])
     cat_size = uname.split('bnch')[-1] #'92randbnch110'
     cat = cat_size[0]
     size = cat_size[1::]
     t = data['res']['t']
+    usense.append_record('comp_comm', {'t':t,'node':node, 'cat':cat, 'size':size})
     if node == '99' or node==99:
         benchmark_own[size]=t
         #t = 0.02
     baseline = benchmark_own.get(size,0)
     if baseline:
         comped = round(baseline/t ,2)
-        return {'node':nine_to_zero(node),'t':comped,'raw_t':t,'bm':int(cat),'size':int(size),'exists':1}
+        return {'node':nine_to_zero(node),'t':comped,'raw_t':t,
+                'bm':int(cat),'size':int(size),'exists':1}
 def is_benchmark(data):
     return 'bnch' in data['u']
 def is_neighbors(data):
@@ -88,7 +92,9 @@ def res_reader(socket, q):
             lst_of_pairs = entry.split('.')
             for pair in lst_of_pairs:
                 lst = pair.split('_')
-                processed = {'source':nine_to_zero(node),'target':nine_to_zero(int(lst[0])),'value':int(lst[1])}
+                processed = {'source':nine_to_zero(node),
+                             'target':nine_to_zero(int(lst[0])),
+                             'value':int(lst[1])}
                 yield from socket.emit('FN',processed)
         else:
             yield from socket.emit('full_result_return', result_prep(data))
@@ -123,7 +129,7 @@ scuts = {"\n    def sampler(self,node):\n        acc = yield from node.testaccel
     def mapper(self,node,d):
         fts = np.fft(d[1]['x'])
         c = lambda d: (d.real,d.imag)
-        k = hash(node.ID)%4
+        descending=sorted(fts,key=math.abs)
         yield(k,(d[0],c(fts[6])))
     def reducer(self,node,k,vs):
         ws = [complex(*i[1]) for i in vs]
@@ -152,6 +158,7 @@ def check_shortcutted(optimised_code,rednode=None):
         return None,optimised_code
 def dis(sid,data):
     print('lost connection')
+
 class QueryWrapper:
     def __init__(self,controller,loop):
         self.controller = controller
@@ -172,16 +179,22 @@ class QueryWrapper:
         nodenumbers = data['nodes']
         await sio.disconnect(sid)
         await bw_runner(self.controller, nodenumbers)
-    async def fetch(self,client, data):
-        async with client.post("http://127.0.0.1:5000/solve", data =data) as resp:
+    async def fetch(self, client, url, data):
+        async with client.post(url, data =data) as resp:
             print('got resp: ',resp)
             assert resp.status == 200
             return await resp.text()
-    async def post_solve(self, data):
+    async def post_solve(self, url, data):
         async with aiohttp.ClientSession(loop=self.loop) as client:
-            response_data = await self.fetch(client, data)
+            response_data = await self.fetch(client,url, data)
             print(response_data)
             return response_data
+    async def baseline_bench(self, sid, data):
+        await sio.disconnect(sid)
+        bench = await self.post_solve("http://127.0.0.1:4242/benchmark", data)
+        t = json.loads(bench)['t']
+        usense.append_record('comp_comm', {'t':t,'node':99, 'cat':data['cat'], 'size':data['size']})
+        print('baseline bench', bench)
     async def query_passer(self,sid, data):
         query = data
         job = query['job']
@@ -194,7 +207,7 @@ class QueryWrapper:
                          ,'rssi':query.get('rssi'), 'px':query.get('px')}
         print('sending to dag engine')
         sio.disconnect(sid)
-        txt_response = await self.post_solve(post_data)
+        txt_response = await self.post_solve("http://127.0.0.1:4242/solve", post_data)
         response = json.loads(txt_response)
         optimal_sensenodes = no_zeroes(response['sol']['S'])
         optimal_mapnodes = no_zeroes(response['sol']['M'])
@@ -216,7 +229,7 @@ class QueryWrapper:
         print('node!: ',all_nodes)
         for node in all_nodes:
             print('sending to: ',node)
-            #await self.controller.node_to_node(send_data, controller.comm.address_book[node])
+            await self.controller.node_to_node(send_data, controller.comm.address_book[node])
             await asyncio.sleep(0)
 async def heartbeat():
     while True:
@@ -238,6 +251,7 @@ if __name__ == "__main__":
     loop.add_reader(comm.uart.fd, usense.handle_stdin, comm, loop)
     sio.on('queryToGateway')(QueryWrapper(controller,loop).query_passer)
     sio.on('runbenchmark')(QueryWrapper(controller,loop).run_benchmark)
+    sio.on('baseline')(QueryWrapper(controller,loop).baseline_bench)
     sio.on('runfinder')(QueryWrapper(controller,loop).run_finder)
     sio.on('runbandwidth')(QueryWrapper(controller,loop).run_bw)
     tasks = [controller.multiple_chunk_assembler(), controller.radio_listener()
