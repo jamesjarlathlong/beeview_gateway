@@ -24,6 +24,7 @@ class ZigbeeStreamWriter():
         yield from asyncio.sleep(0)
         frameified = self.s.prepare_send('tx', frame_id = frame_id, data=buf,
                                     dest_addr_long=addr, dest_addr=b'\xff\xfe')
+        print('frameified: ', frameified)
         self._transport.write(frameified)
     def network_awrite_single(self, single, addr,frame_id):
         """
@@ -105,15 +106,26 @@ def timed_gen(gen, user, key=None, node=None):
     while True:
         try:
             t, res = timeit(next)(gen)
+            print('t: ',t, 'res: ', res)
             ts.append(t)
             yield res
         except StopIteration:
             break
     print('timed gen**********',user,key,node)
-    if key:
-        append_record('px_stats',{'type':'reducer','ts':ts,'onkey':key,'job':user})
+    if key is not None:
+        append_record('px_stats',
+                      {'type':'reducer'
+                       ,'ts':ts
+                       ,'onkey':key
+                       ,'job':user
+                       ,'self':99})
     else:
-        append_record('px_stats',{'type':'mapper','ts':ts,'mapnum':node,'job':user})
+        append_record('px_stats',
+                     {'type':'mapper'
+                      ,'ts':ts
+                      ,'mapnum':node
+                      ,'job':user
+                      ,'self':99})
 def macrotimer(method):
     def timed(*args, **kw):
         ts = time.time()
@@ -125,22 +137,22 @@ def macrotimer(method):
     return timed
 @timeit
 def benchmark_runner(size, bm_fun):
-    bm_name(size)
+    bm_fun(size)
     return
-def bm1(size):
+def b1(size):
     def vec(size):
         return [urandom.getrandbits(8)/100 for i in range(size)]    
     mat = (vec(size) for i in range(size))
     v = np.Vector(*vec(size))
     res = v.gen_matrix_mult(mat)
     return 
-def bm2(size):
+def b2(size):
     def vec(size):
         return [urandom.getrandbits(8)/100 for i in range(size)]    
-    mat = (vec(size) for i in range(size))
+    mat = [vec(size) for i in range(size)]
     res = np.pagerank(mat)
     return
-def bm3(size):
+def b3(size):
     def vec(size):
        return [urandom.getrandbits(8)/100 for i in range(size)]    
     v = vec(size)
@@ -161,7 +173,7 @@ class Comm:
         self.output_q = asyncio.Queue() #q for pieced together messages
         self.intermediate_output_q = asyncio.Queue()
         self.coro_queue = asyncio.PriorityQueue()
-        self.kv_queue = KVQueue(maxsize = 512)
+        self.kv_queue = KVQueue(maxsize = 4096)
         self.sense_queue = KVQueue(maxsize = 32)
         self.f_queue = asyncio.Queue()
         # callback for extint
@@ -170,7 +182,7 @@ class Comm:
             pass
         #self.extint = pyb.ExtInt('X10', pyb.ExtInt.IRQ_RISING_FALLING, pyb.Pin.PULL_NONE, cb)
         #self.uart = pyb.UART(1,9600, read_buf_len=1024)
-        self.uart = serial.Serial('/dev/ttyUSB1', 9600)
+        self.uart = serial.Serial('/dev/ttyUSB0', 9600)
          #allocating 512 bytes to the uart buffer -  alot? maybe but we have ~128 kB of RAM
         self.ZBee = ZigBee(self.uart, escaped =False)
         self.ZBee.send('at', command=b'NO',parameter=b'\x04')
@@ -518,7 +530,8 @@ class ControlTasks:
             self.message_to_queue(message)
         else:
             stats = yield from self.network_awrite_chunked(message, address) 
-            stats['msg'] = message 
+            stats['msg'] = message
+            stats['u'] = message['u'] 
             return stats
     @asyncio.coroutine
     def bandwidth_measurer(self,nodenum):
@@ -588,7 +601,7 @@ class ControlTasks:
             b_type = [k for k in data if k in ('b1','b2','b3')][0]
             size = data[b_type]
             func_translation = {'b1':b1,'b2':b2,'b3':b3}
-            print('running benchmark')
+            print('running benchmark', b_type)
             t, res = benchmark_runner(size, func_translation[b_type])
             self.most_recent_benchmark = t
             result_tx =  {'res':(1,json.dumps({'t':t})),'u':self.add_id(random_word()+'bnch'+b_type[1]+str(size))}
@@ -833,13 +846,13 @@ class ControlTasks:
             reduce_gen = reduce_controller(reduce_logic, key, values)
             #now advance the generator
             for j in timed_gen(reduce_gen, user, key=key):
-                    print('in reduce j: ',j)
-                    if isinstance(j, asyncio.Future):
-                        yield j
-                    else:
-                        if j is not None:
-                            ##print('got a result from reducer! ', j)
-                            results[key] = j[1]
+                print('in reduce j: ',j)
+                if isinstance(j, asyncio.Future):
+                    yield j
+                else:
+                    if j is not None:
+                        ##print('got a result from reducer! ', j)
+                        results[key] = j[1]
         #reduce is now finished on all pairs of key, values
         result_tx =  {'res':(num_reducers,nested_json_dump(results)),'u':self.add_id(curried_func['u'])}
         print('reduce finished: ', result_tx)
