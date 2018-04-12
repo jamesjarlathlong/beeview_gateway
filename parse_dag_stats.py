@@ -24,8 +24,14 @@ def reformat_entry(graph_key,graph_value, solution):
     return node, new_graph
 def reformat(solution, graph):
     return [reformat_entry(k,v,solution) for k,v in graph.items()]
+def is_senser(entry):
+    return entry['name'].split('_')[0]=='S'
 def nodew_translator(k, entry, px):
-    speed = px.get(k)
+    """px is a dictionary of speeds e.g. {'31':0.3,'0':1}
+    k is a node label e.g. '31', entry is a task description
+    like {'edge_w': {'31':1024}, 'name': 'K_0', 'node_w': 0}
+    """
+    speed = 1 if is_senser(entry) else px.get(k)
     new_entry = deepcopy(entry)
     new_entry['node_w'] = new_entry['node_w']/speed
     return new_entry
@@ -34,9 +40,19 @@ def translate_nodeweights(px,graph_list):
      ('31', {'edge_w': {'31': 100}, 'name': 'M_0', 'node_w': 0.6049999999999667})]
      """
     return [(k,nodew_translator(k,v,px)) for k,v in graph_list]
+def get_bw(bw, source, target):
+    try:
+        return bw[source][target]
+    except:
+        couldbe = bw[target][source]
+        return couldbe
+def adjust(volume, source_node, target_node, bw):
+    b= get_bw(bw, source_node, target_node)
+    res = volume*b  
+    return res  
 def edgew_translator(source_node, entry, bw):
     edgeweight_dict = entry['edge_w']
-    new_edgeweights = [(target_node, volume*bw[source_node][target_node])
+    new_edgeweights = [(target_node,adjust(volume, source_node,target_node,bw) )
                        for target_node,volume
                        in edgeweight_dict]
     new_entry = deepcopy(entry)
@@ -44,12 +60,21 @@ def edgew_translator(source_node, entry, bw):
     return new_entry
 def translate_edgeweights(bw, graph_list):
     return [(k, edgew_translator(k, v, bw)) for k,v in graph_list]
-
-if __name__ == '__main__':
-    job_name = sys.argv[1]
+def get_job_record(job_name):
     with open('dag_stats', "r") as f1:
         jsons = (json.loads(line) for line in f1.readlines())
         d = next((line for line in jsons if line.get('job')==job_name))
+        return d
+def get_node_total(entry):
+    return entry.get('node_w')+sum([i[1] for i in entry.get('edge_w')])
+def get_total(results):
+    #results is a tuple of node, and {"node_w": 0, "edge_w": [],'name'}
+    return sum((get_node_total(v) for k,v in results))
+
+if __name__ == '__main__':
+    job_name = sys.argv[1]
+    d = get_job_record(job_name)
     parsed = translate_edgeweights(d['bw'],translate_nodeweights(d['px'],reformat(d['sol'],d['graph'])))
     for k,v in parsed:
         print(k,':',v)
+    print('total: ',d['totaltime'], get_total(parsed))
